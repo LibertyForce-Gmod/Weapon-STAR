@@ -50,7 +50,7 @@ local WSTAR_Used = { } -- Table that contains all players, who used up their Wea
 -- Main function for saving a players weapons.
 local function WSTAR_GetWeapons( ply )
 
-	local id = ply:SteamID() -- We'll use the SteamID to save players the table.
+	local id = ply:SteamID() -- We'll use the SteamID to save player's table.
 	
 	if !istable( WSTAR_WR[id] ) then WSTAR_WR[id] = { } end
 	WSTAR_WR[id].weapon = { }
@@ -65,14 +65,20 @@ local function WSTAR_GetWeapons( ply )
 		local weapon_clip2 = v:Clip2()
 		WSTAR_WR[id].weapon[weapon_class] = { weapon_clip1, weapon_clip2 }
 		
-		-- The second table contains all ammo types in reserve. This this is shared among all weapons, we'll need to save it in another table. 
+		-- The second table contains all ammo types in reserve. Since this is shared among all weapons, we'll need to save it in another table. 
 		local ammo1_type = v:GetPrimaryAmmoType()
-		local ammo1_amount = ply:GetAmmoCount( ammo1_type )
-		WSTAR_WR[id].ammo[ammo1_type] = ammo1_amount
+		if ammo1_type != nil and ammo1_type != -1 then
+			local ammo1_name = game.GetAmmoName( ammo1_type )
+			local ammo1_amount = ply:GetAmmoCount( ammo1_type )
+			WSTAR_WR[id].ammo[ammo1_name] = ammo1_amount
+		end
 
 		local ammo2_type = v:GetSecondaryAmmoType()
-		local ammo2_amount = ply:GetAmmoCount( ammo2_type )
-		WSTAR_WR[id].ammo[ammo2_type] = ammo2_amount
+		if ammo2_type != nil and ammo2_type != -1 then
+			local ammo2_name = game.GetAmmoName( ammo2_type )
+			local ammo2_amount = ply:GetAmmoCount( ammo2_type )
+			WSTAR_WR[id].ammo[ammo2_name] = ammo2_amount
+		end
 		
 		-- Support for Customizable Weaponry 2.0. Code by Spy.
 		if istable( CustomizableWeaponry ) and v.CW20Weapon then -- Only run for CW2 weapons.
@@ -123,7 +129,7 @@ local function WSTAR_RestoreWeapons( ply )
 				if w and IsValid(w) and w:IsWeapon() then
 				
 					-- Fill the primary and secondary ammo. We need a timer because of CW2.
-					timer.Simple( 0.1, function()
+					timer.Simple( 0.4, function()
 						if v[1] and v[1] >= 0 then w:SetClip1( v[1] ) end
 						if v[2] and v[2] >= 0 then w:SetClip2( v[2] ) end
 					end )
@@ -146,7 +152,7 @@ local function WSTAR_RestoreWeapons( ply )
 						end
 
 						-- After giving a CW2 weapon to the player, it needs some time to initialize, before we can send the attachments.
-						timer.Simple( 0.05, function()
+						timer.Simple( 0.2, function()
 							for k, v in pairs(loadOrder) do
 								w:attach(v.category, v.position - 1)
 							end
@@ -159,7 +165,7 @@ local function WSTAR_RestoreWeapons( ply )
 			end
 			
 			-- Next, we'll handle the Ammo table.
-			timer.Simple( 0.3, function()
+			timer.Simple( 0.6, function()
 				for k,v in pairs( tbl.ammo ) do
 					if v then ply:SetAmmo( v, k ) end
 				end

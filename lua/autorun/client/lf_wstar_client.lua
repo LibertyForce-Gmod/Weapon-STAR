@@ -5,6 +5,10 @@
 ----------------------------------------------------
 
 
+local version = "1.3"
+local Frame -- This will be our main menu.
+local WSTAR_LO -- Main table for saved loadouts
+
 -- If this is the first start, create a directory client-side
 if !file.Exists( "wstar", "DATA" ) then file.CreateDir( "wstar" ) end
 
@@ -18,9 +22,6 @@ if file.Exists( "wstar/loadouts.txt", "DATA" ) then
 else
 	WSTAR_LO = { }
 end
-
-local Frame -- This will be our main menu.
-local version = "1.2"
 
 
 -- The server sends the server-side cvars for sync. Note, that we create them here without FCVAR_ARCHIVE,
@@ -37,7 +38,7 @@ end)
 net.Receive("wstar_lo_save", function()
 	local name = net.ReadString()
 	WSTAR_LO[name] = net.ReadTable()
-	file.Write( "wstar/loadouts.txt", util.TableToJSON( WSTAR_LO ) )
+	file.Write( "wstar/loadouts.txt", util.TableToJSON( WSTAR_LO, true ) )
 end)
 
 -- The server tells the player, whether he was allowed to restore his weapons or not.
@@ -50,7 +51,7 @@ net.Receive("wstar", function()
 	end
 end)
 
--- This functions check, if the player wants to enter something in a text field. In that case, the menu
+-- This function checks, if the player wants to enter something in a text field. In that case, the menu
 -- grabs the keyboard and blocks the player's movement. After he's finished, the keyboard is set free again.
 local function KeyboardOn( pnl )
 	if ( IsValid( Frame ) and IsValid( pnl ) and pnl:HasParent( Frame ) ) then
@@ -202,7 +203,7 @@ local function WSTAR_Menu( )
 				local name = tostring( v:GetValue(1) )
 				WSTAR_LO[name] = nil
 			end
-			file.Write( "wstar/loadouts.txt", util.TableToJSON( WSTAR_LO ) )
+			file.Write( "wstar/loadouts.txt", util.TableToJSON( WSTAR_LO, true ) )
 			PopulateList( LoadoutList )
 		end
 		
