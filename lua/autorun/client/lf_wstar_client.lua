@@ -1,7 +1,17 @@
+----------------------------------------------------
+--- Weapon S.T.A.R.: Setup, Transfer And Restore ---
+--- Created by LibertyForce                      ---
+--- http://steamcommunity.com/id/libertyforce    ---
+----------------------------------------------------
+
+
+-- If this is the first start, create a directory client-side
 if !file.Exists( "wstar", "DATA" ) then file.CreateDir( "wstar" ) end
 
+-- Creates the client-side cvars. 
 CreateClientConVar( "wstar_cl_keeploadout", "0", true, true )
 
+-- If the player has already saved loadouts, we'll load them.
 if file.Exists( "wstar/loadouts.txt", "DATA" ) then
 	WSTAR_LO = util.JSONToTable( file.Read( "wstar/loadouts.txt", "DATA" ) )
 	if !istable( WSTAR_LO ) then WSTAR_LO = { } end
@@ -9,7 +19,12 @@ else
 	WSTAR_LO = { }
 end
 
+local Frame -- This will be our main menu.
+local version = "1.2"
 
+
+-- The server sends the server-side cvars for sync. Note, that we create them here without FCVAR_ARCHIVE,
+-- because we don't want to fill the client.vdf file with stuff he doesn't need.
 net.Receive("wstar_convar_sync", function()
 	local tbl = net.ReadTable()
 	for k,v in pairs( tbl ) do
@@ -17,13 +32,16 @@ net.Receive("wstar_convar_sync", function()
 	end
 end)
 
-net.Receive("wstar_lo_save_send", function()
+-- After the client requested to save a new Loadout, the server sends the weapons.
+-- We'll save them to a file on the CLIENTS computer.
+net.Receive("wstar_lo_save", function()
 	local name = net.ReadString()
 	WSTAR_LO[name] = net.ReadTable()
 	file.Write( "wstar/loadouts.txt", util.TableToJSON( WSTAR_LO ) )
 end)
 
-net.Receive("wstar_notify_restore", function()
+-- The server tells the player, whether he was allowed to restore his weapons or not.
+net.Receive("wstar", function()
 	local success = net.ReadBool()
 	if success then
 		notification.AddLegacy( "Weapons restored.", NOTIFY_GENERIC, 5 )
@@ -32,28 +50,44 @@ net.Receive("wstar_notify_restore", function()
 	end
 end)
 
-
-local function PopulateList( LoadoutList )
-	LoadoutList:Clear()
-	for k in pairs( WSTAR_LO ) do
-		LoadoutList:AddLine( k )
+-- This functions check, if the player wants to enter something in a text field. In that case, the menu
+-- grabs the keyboard and blocks the player's movement. After he's finished, the keyboard is set free again.
+local function KeyboardOn( pnl )
+	if ( IsValid( Frame ) and IsValid( pnl ) and pnl:HasParent( Frame ) ) then
+		Frame:SetKeyboardInputEnabled( true )
 	end
-	LoadoutList:SortByColumn( 1 )
+end
+hook.Add( "OnTextEntryGetFocus", "wstar_keyboard_on", KeyboardOn )
+local function KeyboardOff( pnl )
+	if ( IsValid( Frame ) and IsValid( pnl ) and pnl:HasParent( Frame ) ) then
+		Frame:SetKeyboardInputEnabled( false )
+	end
+end
+hook.Add( "OnTextEntryLoseFocus", "wstar_keyboard_off", KeyboardOff )
+
+-- Sends cvar changes to the server.
+local function ChangeConVar( p, v )
+	net.Start("wstar_convar_change")
+	net.WriteString( p.cvar )
+	net.WriteBool( v )
+	net.SendToServer()
 end
 
 
+-- The main menu.
 local function WSTAR_Menu( )
 
-	local Frame = vgui.Create( "DFrame" )
+	Frame = vgui.Create( "DFrame" )
 	local fw, fh = 600, 700
 	local pw, ph = fw - 10, fh - 62
 	Frame:SetSize( fw, fh )
 	Frame:SetTitle( "Weapon S.T.A.R.: Setup, Transfer And Restore" )
 	Frame:SetVisible( true )
-	Frame:SetDraggable( false )
+	Frame:SetDraggable( true )
 	Frame:ShowCloseButton( true )
 	Frame:Center()
 	Frame:MakePopup()
+	Frame:SetKeyboardInputEnabled( false )
 	
 	local Sheet = vgui.Create( "DPropertySheet", Frame )
 	Sheet:Dock( FILL )
@@ -102,7 +136,15 @@ local function WSTAR_Menu( )
 		LoadoutList:SetMultiSelect( true )
 		LoadoutList:AddColumn( "Weapon Loadouts" )
 
-		PopulateList( LoadoutList )
+		local function PopulateList()
+			LoadoutList:Clear()
+			for k in pairs( WSTAR_LO ) do
+				LoadoutList:AddLine( k )
+			end
+			LoadoutList:SortByColumn( 1 )
+		end
+		
+		PopulateList()
 		
 		local t = vgui.Create( "DLabel", panel )
 		t:SetPos( 320, 180 )
@@ -124,7 +166,7 @@ local function WSTAR_Menu( )
 			local name = LoadoutEntry:GetValue()
 			if name == "" then return end
 			WSTAR_LO[name] = { }
-			net.Start("wstar_lo_save_request")
+			net.Start("wstar_lo_save")
 			net.WriteString( name )
 			net.SendToServer()
 			PopulateList( LoadoutList )
@@ -144,7 +186,7 @@ local function WSTAR_Menu( )
 			local sel = LoadoutList:GetSelected()
 			if !sel[1] then return end
 			local name = tostring( sel[1]:GetValue(1) )
-			net.Start("wstar_lo_save_request")
+			net.Start("wstar_lo_save")
 			net.WriteString( name )
 			net.SendToServer()
 			PopulateList( LoadoutList )
@@ -165,14 +207,14 @@ local function WSTAR_Menu( )
 		end
 		
 		local c = vgui.Create( "DCheckBoxLabel", panel )
+		c.cvar = "wstar_cl_keeploadout"
 		c:SetPos( 320, 370 )
-		c:SetValue( GetConVar("wstar_cl_keeploadout"):GetBool() )
+		c:SetValue( GetConVar(c.cvar):GetBool() )
 		c:SetText( "Persistent Loadout" )
 		c:SetDark( true )
 		c:SizeToContents()
-		function c:OnChange( v )
-			if v then v = "1" else v = "0" end
-			RunConsoleCommand( "wstar_cl_keeploadout", v )
+		c.OnChange = function( p, v )
+			RunConsoleCommand( c.cvar, v == true and "1" or "0" )
 		end
 		
 		local t = vgui.Create( "DLabel", panel )
@@ -191,7 +233,7 @@ local function WSTAR_Menu( )
 			if !sel[1] then return end
 			local name = tostring( sel[1]:GetValue(1) )
 			if istable( WSTAR_LO[name] ) then
-				net.Start("wstar_lo_load_request")
+				net.Start("wstar_lo_load")
 				net.WriteTable( WSTAR_LO[name] )
 				net.SendToServer()
 				notification.AddLegacy( "Loadout will be applied upon respawn.", NOTIFY_GENERIC, 5 )
@@ -203,7 +245,7 @@ local function WSTAR_Menu( )
 		b:SetSize( 240, 20 )
 		b:SetText( "Undo request" )
 		b.DoClick = function()
-			net.Start("wstar_lo_undo_request")
+			net.Start("wstar_lo_undo")
 			net.SendToServer()
 			notification.AddLegacy( "Loadout request undone.", NOTIFY_CLEANUP, 5 )
 		end
@@ -239,17 +281,13 @@ local function WSTAR_Menu( )
 		t:SizeToContents()
 		
 		local c = vgui.Create( "DCheckBoxLabel", panel )
+		c.cvar = "wstar_sv_auto"
 		c:SetPos( 20, 70 )
-		c:SetValue( GetConVar("wstar_sv_auto"):GetBool() )
+		c:SetValue( GetConVar(c.cvar):GetBool() )
 		c:SetText( "Auto Restore" )
 		c:SetDark( true )
 		c:SizeToContents()
-		function c:OnChange( v )
-			net.Start("wstar_convar_change")
-			net.WriteString( "wstar_sv_auto" )
-			net.WriteBit( v )
-			net.SendToServer()
-		end
+		c.OnChange = ChangeConVar
 		
 		local t = vgui.Create( "DLabel", panel )
 		t:SetPos( 20, 90 )
@@ -260,17 +298,13 @@ local function WSTAR_Menu( )
 		t:SetWrap( true )
 		
 		local c = vgui.Create( "DCheckBoxLabel", panel )
+		c.cvar = "wstar_sv_stripdefault"
 		c:SetPos( 20, 140 )
-		c:SetValue( GetConVar("wstar_sv_stripdefault"):GetBool() )
+		c:SetValue( GetConVar(c.cvar):GetBool() )
 		c:SetText( "Strip default weapons" )
 		c:SetDark( true )
 		c:SizeToContents()
-		function c:OnChange( v )
-			net.Start("wstar_convar_change")
-			net.WriteString( "wstar_sv_stripdefault" )
-			net.WriteBit( v )
-			net.SendToServer()
-		end
+		c.OnChange = ChangeConVar
 		
 		local t = vgui.Create( "DLabel", panel )
 		t:SetPos( 20, 160 )
@@ -281,17 +315,13 @@ local function WSTAR_Menu( )
 		t:SetWrap( true )
 		
 		local c = vgui.Create( "DCheckBoxLabel", panel )
+		c.cvar = "wstar_sv_blockloadout"
 		c:SetPos( 20, 210 )
-		c:SetValue( GetConVar("wstar_sv_blockloadout"):GetBool() )
+		c:SetValue( GetConVar(c.cvar):GetBool() )
 		c:SetText( "Block default weapon loadout" )
 		c:SetDark( true )
 		c:SizeToContents()
-		function c:OnChange( v )
-			net.Start("wstar_convar_change")
-			net.WriteString( "wstar_sv_blockloadout" )
-			net.WriteBit( v )
-			net.SendToServer()
-		end
+		c.OnChange = ChangeConVar
 		
 		local t = vgui.Create( "DLabel", panel )
 		t:SetPos( 20, 230 )
@@ -302,21 +332,13 @@ local function WSTAR_Menu( )
 		t:SetWrap( true )
 		
 		local c = vgui.Create( "DCheckBoxLabel", panel )
+		c.cvar = "wstar_sv_multi"
 		c:SetPos( 20, 330 )
-		c:SetValue( GetConVar("wstar_sv_multi"):GetBool() )
+		c:SetValue( GetConVar(c.cvar):GetBool() )
 		c:SetText( "Allow multiple restores" )
 		c:SetDark( true )
 		c:SizeToContents()
-		function c:PerformLayout()
-			self:SetFontInternal( "ChatFont" )
-			self:SetFGColor( Color( 255, 255, 255 ) )
-		end
-		function c:OnChange( v )
-			net.Start("wstar_convar_change")
-			net.WriteString( "wstar_sv_multi" )
-			net.WriteBit( v )
-			net.SendToServer()
-		end
+		c.OnChange = ChangeConVar
 		
 		local t = vgui.Create( "DLabel", panel )
 		t:SetPos( 20, 350 )
@@ -327,17 +349,13 @@ local function WSTAR_Menu( )
 		t:SetWrap( true )
 		
 		local c = vgui.Create( "DCheckBoxLabel", panel )
+		c.cvar = "wstar_sv_loadouts"
 		c:SetPos( 20, 420 )
-		c:SetValue( GetConVar("wstar_sv_loadouts"):GetBool() )
+		c:SetValue( GetConVar(c.cvar):GetBool() )
 		c:SetText( "Enable Loadouts" )
 		c:SetDark( true )
 		c:SizeToContents()
-		function c:OnChange( v )
-			net.Start("wstar_convar_change")
-			net.WriteString( "wstar_sv_loadouts" )
-			net.WriteBit( v )
-			net.SendToServer()
-		end
+		c.OnChange = ChangeConVar
 		
 		local t = vgui.Create( "DLabel", panel )
 		t:SetPos( 20, 440 )
@@ -345,6 +363,23 @@ local function WSTAR_Menu( )
 		t:SetSize( pw - 40, 0 )
 		t:SetDark( true )
 		t:SetText( "If enabled, all players can use the Loadout function.\nIf disabled, they can still save and edit Loadouts but not apply them." )
+		t:SetWrap( true )
+		
+		local c = vgui.Create( "DCheckBoxLabel", panel )
+		c.cvar = "wstar_sv_support_cw2"
+		c:SetPos( 20, 490 )
+		c:SetValue( GetConVar(c.cvar):GetBool() )
+		c:SetText( "Enable Customizable Weaponry 2.0 support" )
+		c:SetDark( true )
+		c:SizeToContents()
+		c.OnChange = ChangeConVar
+		
+		local t = vgui.Create( "DLabel", panel )
+		t:SetPos( 20, 510 )
+		t:SetAutoStretchVertical( true )
+		t:SetSize( pw - 40, 0 )
+		t:SetDark( true )
+		t:SetText( "Enables support for Customizable Weaponry 2.0 attachments. If enabled, all attachments on CW2 weapons can be restored. This setting has no effect if CW2 isn't installed." )
 		t:SetWrap( true )
 		
 		if LocalPlayer():IsSuperAdmin() then
@@ -359,18 +394,14 @@ local function WSTAR_Menu( )
 			t:SetWrap( true )
 			
 			local c = vgui.Create( "DCheckBoxLabel", panel )
+			c.cvar = "wstar_sv_admins_allowall"
 			c:SetPos( 20, 600 )
-			c:SetValue( GetConVar("wstar_sv_admins_allowall"):GetBool() )
+			c:SetValue( GetConVar(c.cvar):GetBool() )
 			c:SetText( "Allow all admins to access Settings and Weapon Transfer." )
 			c:SetDark( true )
 			c:SizeToContents()
 			c:SetEnabled( false )
-			function c:OnChange( v )
-				net.Start("wstar_convar_change")
-				net.WriteString( "wstar_sv_admins_allowall" )
-				net.WriteBit( v )
-				net.SendToServer()
-			end
+			c.OnChange = ChangeConVar
 		
 		end
 	
@@ -386,17 +417,13 @@ local function WSTAR_Menu( )
 		t:SizeToContents()
 		
 		local c = vgui.Create( "DCheckBoxLabel", panel )
+		c.cvar = "wstar_sv_transfer_enabled"
 		c:SetPos( 20, 70 )
-		c:SetValue( GetConVar("wstar_sv_transfer_enabled"):GetBool() )
+		c:SetValue( GetConVar(c.cvar):GetBool() )
 		c:SetText( "Enable Weapon Transfer" )
 		c:SetDark( true )
 		c:SizeToContents()
-		function c:OnChange( v )
-			net.Start("wstar_convar_change")
-			net.WriteString( "wstar_sv_transfer_enabled" )
-			net.WriteBit( v )
-			net.SendToServer()
-		end
+		c.OnChange = ChangeConVar
 		
 		local t = vgui.Create( "DLabel", panel )
 		t:SetPos( 20, 100 )
@@ -424,17 +451,13 @@ local function WSTAR_Menu( )
 		t:SetWrap( true )
 		
 		local c = vgui.Create( "DCheckBoxLabel", panel )
+		c.cvar = "wstar_sv_transfer_spauto"
 		c:SetPos( 20, 290 )
-		c:SetValue( GetConVar("wstar_sv_transfer_spauto"):GetBool() )
+		c:SetValue( GetConVar(c.cvar):GetBool() )
 		c:SetText( "Enable autosave on shutdown" )
 		c:SetDark( true )
 		c:SizeToContents()
-		function c:OnChange( v )
-			net.Start("wstar_convar_change")
-			net.WriteString( "wstar_sv_transfer_spauto" )
-			net.WriteBit( v )
-			net.SendToServer()
-		end
+		c.OnChange = ChangeConVar
 		
 		local t = vgui.Create( "DLabel", panel )
 		t:SetPos( 20, 350 )
@@ -454,17 +477,13 @@ local function WSTAR_Menu( )
 		t:SetWrap( true )
 		
 		local c = vgui.Create( "DCheckBoxLabel", panel )
+		c.cvar = "wstar_sv_transfer_mpauto"
 		c:SetPos( 20, 430 )
-		c:SetValue( GetConVar("wstar_sv_transfer_mpauto"):GetBool() )
+		c:SetValue( GetConVar(c.cvar):GetBool() )
 		c:SetText( "Enable 10 sec. autosave timer" )
 		c:SetDark( true )
 		c:SizeToContents()
-		function c:OnChange( v )
-			net.Start("wstar_convar_change")
-			net.WriteString( "wstar_sv_transfer_mpauto" )
-			net.WriteBit( v )
-			net.SendToServer()
-		end
+		c.OnChange = ChangeConVar
 		
 		local b = vgui.Create( "DButton", panel )
 		b:SetPos( 20, 500 )
@@ -510,7 +529,7 @@ local function WSTAR_Menu( )
 		b:SetSize( 300, 20 )
 		b:SetText( "Save weapons and change map" )
 		b.DoClick = function()
-			net.Start("wstar_changelevel")
+			net.Start("wstar_save")
 			net.WriteString( MapEntry:GetValue() )
 			net.SendToServer()
 		end	
@@ -534,7 +553,7 @@ local function WSTAR_Menu( )
 		t:SetSize( pw - 40, 0 )
 		t:SetDark( true )
 		t:SetFont( "DermaDefaultBold" )
-		t:SetText( "Created by LibertyForce." )
+		t:SetText( "Version "..version.." - Created by LibertyForce." )
 		t:SetWrap( true )
 		
 		local t = vgui.Create( "DLabel", panel )
@@ -547,18 +566,54 @@ local function WSTAR_Menu( )
 		
 		local b = vgui.Create( "DButton", panel )
 		b:SetPos( 20, 190 )
-		b:SetSize( 120, 25 )
+		b:SetSize( 150, 25 )
 		b:SetText( "Visit addon page" )
 		b.DoClick = function()
 			gui.OpenURL( "http://steamcommunity.com/sharedfiles/filedetails/?id=492765756" )
 		end
-	
+		
+		local b = vgui.Create( "DButton", panel )
+		b:SetPos( 190, 190 )
+		b:SetSize( 150, 25 )
+		b:SetText( "More addons" )
+		b.DoClick = function()
+			gui.OpenURL( "http://steamcommunity.com/workshop/filedetails/?id=500953460" )
+		end
+		
+		local b = vgui.Create( "DButton", panel )
+		b:SetPos( 360, 190 )
+		b:SetSize( 150, 25 )
+		b:SetText( "My Playermodels (Anime)" )
+		b.DoClick = function()
+			gui.OpenURL( "http://steamcommunity.com/sharedfiles/filedetails/?id=334922161" )
+		end
+		
+		local t = vgui.Create( "DLabel", panel )
+		t:SetPos( 20, 250 )
+		t:SetAutoStretchVertical( true )
+		t:SetSize( pw - 40, 0 )
+		t:SetDark( true )
+		t:SetText( "Console Commands:" )
+		t:SetWrap( true )
+		
+		local t = vgui.Create( "DHTML", panel )
+		t:SetSize( pw - 35, 350 )
+		t:SetPos( 10, 270 )
+		t:SetHTML( [[
+			<html><body style="background-color: #FFFFFF; font-family: sans-serif; font-size: 10pt">
+			<h3>Client-side commands and convars</h3><br>These can be executed / changed from client console.<br><br><ul class="bb_ul"><li><b>wstar_menu</b><br>Opens the main menu. Recommended to bind this to a key.<br><br></li><li><b>wstar</b><br>Restores your weapons. Same as the big Restore Weapons button.<br><br></li><li><b>wstar_save</b><br>Admins only: Manually save the weapons of all players to a file. Used to prepare Weapon Transfer. Works only if Weapon Transfer is enabled.<br><br><br></li><li><b>wstar_cl_keeploadout</b> 0 / 1 <i>(Default: 0)</i><br>Enable persistent Weapon Loadouts.</li></ul><br><br><h3>Server-side convars</h3><br>These can only be changed from server console / rcon. Or use the menu, which allows admins to easily change all settings.<br><br><ul class="bb_ul"><li><b>wstar_sv_auto</b> 0 / 1 <i>(Default: 1)</i><br>Toggle auto restore of weapons. Can be used to disable the addon, if you don't want to use it.<br><br></li><li><b>wstar_sv_stripdefault</b> 0 / 1 <i>(Default: 1)</i><br>If enabled, the default loadout will be removed upon restore. Please note, that your ammo will be overwritten regardless. Recommended to keep on.<br><br></li><li><b>wstar_sv_blockloadout</b> 0 / 1 <i>(Default: 0)</i><br>If enabled, the default weapon loadout will be blocked. This is useful for transition between maps (like the HL2 campain).<br><br></li><li><b>wstar_sv_multi</b> 0 / 1 <i>(Default: 0)</i><br>If enabled, you will be able to restore your weapons and ammo manually anytime. Normally, you can only restore your weapons once per spawn. This allows cheating for more ammo.<br><br></li><li><b>wstar_sv_loadouts</b> 0 / 1 <i>(Default: 1)</i><br>Toggles the Loadout function. Disable if you don't want to use Loadouts on your server.<br><br></li><li><b>wstar_sv_support_cw2</b> 0 / 1 <i>(Default: 1)</i><br>Enables support for Customizable Weaponry 2.0 attachments.<br><br></li><li><b>wstar_sv_transfer_enabled</b> 0 / 1 <i>(Default: 0)</i><br>Toggles the Weapon Transfer function. You should only enable this, if you want to transfer weapons, otherwise you may startup Gmod and end up with yesterday's weapons.<br><br></li><li><b>wstar_sv_transfer_spauto</b> 0 / 1 <i>(Default: 1)</i><br>Toggles auto save for Weapon Transfer in SinglePlayer. If you disable that, you will have to use the wstar_save command BEFORE changing the map (or use the changelevel function in the menu).<br><br></li><li><b>wstar_sv_transfer_mpauto</b> 0 / 1 <i>(Default: 0)</i><br>Multiplayer only: Creates a timer, which saves the weapons of all players every 10 seconds. Normally you'll need to save manually before Weapon Transfer in multiplayer. Enabling this might cause performance issues. Use on your own risk!<br><br></li><li><b>wstar_sv_admins_allowall</b> 0 / 1 <i>(Default: 0)</i><br>If enabled, all other settings can be changed by normal admins via menu. Otherwise, only Super-Admins can change settings.<br><i>Of course, this setting can only be changed by Super-Admins / rcon / server console.</i></li></ul>
+			</body></html>
+		]] )
 		
 end
 
+local function MenuToggle()
+	if IsValid( Frame ) then Frame:Close() else WSTAR_Menu() end
+end
 
+
+-- Spawn Menu entry.
 local function WSTAR_SpawnMenu( panel )
-	
 	panel:AddControl("Label", {Text = " "})
 	local a = panel:AddControl("Button", {Label = "Restore Weapons", Command = "wstar"})
 	a:SetSize(0, 50)
@@ -576,18 +631,29 @@ local function WSTAR_SpawnMenu( panel )
 	a:SetVerticalScrollbarEnabled( false )
 	panel:AddControl("Label", {Text = "You can copy and paste above command to your console. Replace X with a valid key on your keyboard."})
 end
-
 hook.Add( "PopulateToolMenu", "WSTAR_SpawnMenu_Hook", function() spawnmenu.AddToolMenuOption( "Options", "Player", "WSTAR_SpawnMenuItem", "Weapon S.T.A.R.", "", "", WSTAR_SpawnMenu, {} ) end )
 
+-- Context menu icon.
+list.Set( "DesktopWindows", "WSTAR", {
+	title		= "Weapon STAR",
+	icon		= "icon64/wstar_icon.png",
+	init		= function( icon, window )
+		window:Remove()
+		RunConsoleCommand("wstar_menu")
+	end
+} )
 
-concommand.Add( "wstar_menu", WSTAR_Menu )
 
-concommand.Add( "wstar", function()
+-- Client-side concommands.
+
+concommand.Add( "wstar_menu", MenuToggle ) -- Opens the menu.
+
+concommand.Add( "wstar", function() -- Manual weapon restore.
 	net.Start("wstar")
 	net.SendToServer()
 end )
 
-concommand.Add( "wstar_save", function()
+concommand.Add( "wstar_save", function() -- Save all players weapons.
 	net.Start("wstar_save")
 	net.SendToServer()
 end )
