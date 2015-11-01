@@ -1,0 +1,18 @@
+{
+    "description": "Description",
+    "ignore": [
+        "*.ini",
+        "*.db",
+        "*.psd",
+        "*.vcproj",
+        "*.svn*",
+        "*.git*"
+    ],
+    "tags": [
+        "fun",
+        "roleplay"
+    ],
+    "title": "Weapon: Setup, Transfer And Restore",
+    "type": "tool",
+    "workshopid": 492765756.0
+}
