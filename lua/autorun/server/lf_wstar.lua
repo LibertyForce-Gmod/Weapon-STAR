@@ -1,18 +1,19 @@
 if !file.Exists( "wstar", "DATA" ) then file.CreateDir( "wstar" ) end
 
-local wstar_convars = {
-CreateConVar( "wstar_sv_auto",				1, { FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY } ) ,
-CreateConVar( "wstar_sv_stripdefault",		1, { FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY } ) ,
-CreateConVar( "wstar_sv_blockloadout",		0, { FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY } ) ,
-CreateConVar( "wstar_sv_multi",				0, { FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY } ) ,
-CreateConVar( "wstar_sv_transfer_enabled",	0, { FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY } ) ,
-CreateConVar( "wstar_sv_transfer_spauto",	1, { FCVAR_ARCHIVE, FCVAR_REPLICATED } ) ,
-CreateConVar( "wstar_sv_transfer_mpauto",	0, { FCVAR_ARCHIVE, FCVAR_REPLICATED } ) ,
-CreateConVar( "wstar_sv_loadouts",			1, { FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY } ) ,
-CreateConVar( "wstar_sv_admins_allowall",	0, { FCVAR_ARCHIVE, FCVAR_REPLICATED } )
-}
+local convars = { }
+convars["wstar_sv_auto"]				= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY ) }
+convars["wstar_sv_stripdefault"]		= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY ) }
+convars["wstar_sv_blockloadout"]		= { 0, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY ) }
+convars["wstar_sv_multi"]				= { 0, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY ) }
+convars["wstar_sv_transfer_enabled"]	= { 0, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY ) }
+convars["wstar_sv_transfer_spauto"]		= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
+convars["wstar_sv_transfer_mpauto"]		= { 0, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
+convars["wstar_sv_loadouts"]			= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY ) }
+convars["wstar_sv_admins_allowall"]		= { 0, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
 
--- CreateConVar( "wstar_debug_hookloadout",	0, { FCVAR_ARCHIVE, FCVAR_REPLICATED } )
+for cvar, v in pairs( convars ) do
+	CreateConVar( cvar,	v[1], v[2] )
+end
 
 AddCSLuaFile("../client/lf_wstar_client.lua")
 
@@ -33,7 +34,7 @@ local WSTAR_LO = { }
 local WSTAR_Used = { }
 
 
-function WSTAR_GetWeapons( ply )
+local function WSTAR_GetWeapons( ply )
 
 	local id = ply:SteamID()
 	
@@ -64,9 +65,9 @@ end
 hook.Add("PostPlayerDeath","WSTAR_PlayerDeath", WSTAR_GetWeapons)
 
 
-function WSTAR_RestoreWeapons( ply )
+local function WSTAR_RestoreWeapons( ply )
 
-	timer.Simple( 0.1, function()
+	timer.Simple( 0.5, function()
 	
 		local id = ply:SteamID()
 		local tbl
@@ -109,33 +110,25 @@ function WSTAR_RestoreWeapons( ply )
 
 end
 
--- if !GetConVar("wstar_debug_hookloadout"):GetBool() then
-	hook.Add( "PlayerSpawn", "WSTAR_PlayerSpawn", function(ply)
-		if GetConVar("wstar_sv_auto"):GetBool() then WSTAR_RestoreWeapons(ply) end
-	end )
-	hook.Add( "PlayerLoadout", "WSTAR_PlayerSpawn", function(ply)
-		if GetConVar("wstar_sv_blockloadout"):GetBool() then return true end
-	end )
---[[else
-	hook.Add( "PlayerLoadout", "WSTAR_PlayerSpawn", function(ply)
-		if GetConVar("wstar_sv_auto"):GetBool() then WSTAR_RestoreWeapons(ply) end
-		if GetConVar("wstar_sv_blockloadout"):GetBool() then return true end
-	end )
-end ]]
+hook.Add( "PlayerSpawn", "WSTAR_PlayerSpawn", function(ply)
+	if GetConVar("wstar_sv_auto"):GetBool() then WSTAR_RestoreWeapons(ply) end
+end )
+hook.Add( "PlayerLoadout", "WSTAR_PlayerSpawn", function(ply)
+	if GetConVar("wstar_sv_blockloadout"):GetBool() then return true end
+end )
 
 
-function WSTAR_SaveToFile( )
+local function WSTAR_SaveToFile( )
 	if GetConVar("wstar_sv_transfer_enabled"):GetBool() then
 		for k,ply in pairs( player.GetHumans() ) do
 			if ply:Alive() then
 				WSTAR_GetWeapons( ply )
 			end
 		end
-		-- file.Write( "wstar/transfer.txt", util.TableToJSON( WSTAR_WR ) )
 	end
 end
 
-function WSTAR_SetupTimer()
+local function WSTAR_SetupTimer()
 	if GetConVar("wstar_sv_transfer_enabled"):GetBool() and GetConVar("wstar_sv_transfer_mpauto"):GetBool() then
 		timer.Create( "WSTAR_Timer", 10, 0, WSTAR_SaveToFile )
 	else
@@ -208,8 +201,8 @@ end)
 
 hook.Add( "PlayerAuthed", "WSTAR_ConVar_Sync", function( ply )
 	local tbl = { }
-	for _,cvar in pairs( wstar_convars ) do
-		tbl[cvar:GetName()] = cvar:GetInt()
+	for cvar in pairs( convars ) do
+		tbl[cvar] = GetConVar(cvar):GetInt()
 	end
 	net.Start("wstar_convar_sync")
 	net.WriteTable( tbl )
@@ -219,55 +212,10 @@ end )
 net.Receive("wstar_convar_change", function(len,ply)
 	if ply:IsValid() and ply:IsPlayer() then
 		local cvar = net.ReadString()
+		if !convars[cvar] then ply:Kick("Illegal convar change") return end
 		if !ply:IsSuperAdmin() and !( GetConVar("wstar_sv_admins_allowall"):GetBool() and ply:IsAdmin() ) then return end
 		if !ply:IsSuperAdmin() and cvar == "wstar_sv_admins_allowall" then return end
 		RunConsoleCommand( cvar, net.ReadBit() )
-	end
-end)
-
-net.Receive("wstar_sv_auto", function(len,ply)
-	if ply:IsValid() and ply:IsPlayer() and ( ply:IsSuperAdmin() or ( GetConVar("wstar_sv_admins_allowall"):GetBool() and ply:IsAdmin() ) ) then
-		RunConsoleCommand( "wstar_sv_auto", net.ReadBit() )
-	end
-end)
-net.Receive("wstar_sv_stripdefault", function(len,ply)
-	if ply:IsValid() and ply:IsPlayer() and ( ply:IsSuperAdmin() or ( GetConVar("wstar_sv_admins_allowall"):GetBool() and ply:IsAdmin() ) ) then
-		RunConsoleCommand( "wstar_sv_stripdefault", net.ReadBit() )
-	end
-end)
-net.Receive("wstar_sv_blockloadout", function(len,ply)
-	if ply:IsValid() and ply:IsPlayer() and ( ply:IsSuperAdmin() or ( GetConVar("wstar_sv_admins_allowall"):GetBool() and ply:IsAdmin() ) ) then
-		RunConsoleCommand( "wstar_sv_blockloadout", net.ReadBit() )
-	end
-end)
-net.Receive("wstar_sv_multi", function(len,ply)
-	if ply:IsValid() and ply:IsPlayer() and ( ply:IsSuperAdmin() or ( GetConVar("wstar_sv_admins_allowall"):GetBool() and ply:IsAdmin() ) ) then
-		RunConsoleCommand( "wstar_sv_multi", net.ReadBit() )
-	end
-end)
-net.Receive("wstar_sv_transfer_enabled", function(len,ply)
-	if ply:IsValid() and ply:IsPlayer() and ( ply:IsSuperAdmin() or ( GetConVar("wstar_sv_admins_allowall"):GetBool() and ply:IsAdmin() ) ) then
-		RunConsoleCommand( "wstar_sv_transfer_enabled", net.ReadBit() )
-	end
-end)
-net.Receive("wstar_sv_transfer_spauto", function(len,ply)
-	if ply:IsValid() and ply:IsPlayer() and ( ply:IsSuperAdmin() or ( GetConVar("wstar_sv_admins_allowall"):GetBool() and ply:IsAdmin() ) ) then
-		RunConsoleCommand( "wstar_sv_transfer_spauto", net.ReadBit() )
-	end
-end)
-net.Receive("wstar_sv_transfer_mpauto", function(len,ply)
-	if ply:IsValid() and ply:IsPlayer() and ( ply:IsSuperAdmin() or ( GetConVar("wstar_sv_admins_allowall"):GetBool() and ply:IsAdmin() ) ) then
-		RunConsoleCommand( "wstar_sv_transfer_mpauto", net.ReadBit() )
-	end
-end)
-net.Receive("wstar_sv_loadouts", function(len,ply)
-	if ply:IsValid() and ply:IsPlayer() and ( ply:IsSuperAdmin() or ( GetConVar("wstar_sv_admins_allowall"):GetBool() and ply:IsAdmin() ) ) then
-		RunConsoleCommand( "wstar_sv_loadouts", net.ReadBit() )
-	end
-end)
-net.Receive("wstar_sv_admins_allowall", function(len,ply)
-	if ply:IsValid() and ply:IsPlayer() and ply:IsSuperAdmin() then
-		RunConsoleCommand( "wstar_sv_admins_allowall", net.ReadBit() )
 	end
 end)
 
