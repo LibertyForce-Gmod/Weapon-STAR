@@ -7,7 +7,7 @@
 
 local version = "1.3"
 local Frame -- This will be our main menu.
-local WSTAR_LO -- Main table for saved loadouts
+local WSTAR_LO = { } -- Main table for saved loadouts
 
 -- If this is the first start, create a directory client-side
 if !file.Exists( "wstar", "DATA" ) then file.CreateDir( "wstar" ) end
@@ -17,10 +17,12 @@ CreateClientConVar( "wstar_cl_keeploadout", "0", true, true )
 
 -- If the player has already saved loadouts, we'll load them.
 if file.Exists( "wstar/loadouts.txt", "DATA" ) then
-	WSTAR_LO = util.JSONToTable( file.Read( "wstar/loadouts.txt", "DATA" ) )
-	if !istable( WSTAR_LO ) then WSTAR_LO = { } end
-else
-	WSTAR_LO = { }
+	local loaded = util.JSONToTable( file.Read( "wstar/loadouts.txt", "DATA" ) )
+	if istable( loaded ) then
+		for k,v in pairs( loaded ) do
+			WSTAR_LO[tostring(k)] = v
+		end
+	end
 end
 
 
