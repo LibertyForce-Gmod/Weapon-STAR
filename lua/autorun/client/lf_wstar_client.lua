@@ -17,12 +17,28 @@ CreateClientConVar( "wstar_cl_keeploadout", "0", true, true )
 
 -- If the player has already saved loadouts, we'll load them.
 if file.Exists( "wstar/loadouts.txt", "DATA" ) then
-	local loaded = util.JSONToTable( file.Read( "wstar/loadouts.txt", "DATA" ) )
-	if istable( loaded ) then
-		for k,v in pairs( loaded ) do
-			WSTAR_LO[tostring(k)] = v
+	WSTAR_LO = util.JSONToTable( file.Read( "wstar/loadouts.txt", "DATA" ) )
+	if istable( WSTAR_LO ) then
+		for k,v in pairs( WSTAR_LO ) do
+			for k2,v2 in pairs( v.ammo ) do
+				if !isstring(k2) then
+					v.ammo[tostring(k2)] = v2
+					v.ammo[k2] = nil
+				end
+			end
+			for k2,v2 in pairs( v.weapon ) do
+				if !isstring(k2) then
+					v.weapon[tostring(k2)] = v2
+					v.weapon[k2] = nil
+				end
+			end
+			if !isstring(k) then
+				WSTAR_LO[tostring(k)] = v
+				WSTAR_LO[k] = nil
+			end
 		end
 	end
+	PrintTable( WSTAR_LO )
 end
 
 
