@@ -38,7 +38,6 @@ if file.Exists( "wstar/loadouts.txt", "DATA" ) then
 			end
 		end
 	end
-	PrintTable( WSTAR_LO )
 end
 
 
