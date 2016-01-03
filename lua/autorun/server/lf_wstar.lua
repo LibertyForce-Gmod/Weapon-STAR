@@ -14,12 +14,13 @@ local convars = { }
 convars["wstar_sv_auto"]				= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY ) }
 convars["wstar_sv_stripdefault"]		= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY ) }
 convars["wstar_sv_blockloadout"]		= { 0, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY ) }
-convars["wstar_sv_multi"]				= { 0, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY ) }
+convars["wstar_sv_multi"]				= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY ) }
 convars["wstar_sv_transfer_enabled"]	= { 0, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY ) }
 convars["wstar_sv_transfer_spauto"]		= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
 convars["wstar_sv_transfer_mpauto"]		= { 0, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
 convars["wstar_sv_loadouts"]			= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY ) }
 convars["wstar_sv_support_cw2"]			= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY ) }
+convars["wstar_sv_support_delay"]		= { 3, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
 convars["wstar_sv_admins_allowall"]		= { 0, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
 
 -- Let's create the cvars server-side.
@@ -101,91 +102,97 @@ hook.Add("PostPlayerDeath","WSTAR_PlayerDeath", WSTAR_GetWeapons) -- The GetWeap
 
 -- Main function for restoring a players weapons.
 local function WSTAR_RestoreWeapons( ply )
-
-	timer.Simple( 0.5, function() -- Give some time after player spawn.
 	
-		local id = ply:SteamID()
-		local tbl
-		
-		-- If the WSTAR_LO table exsists for the player, it means he requested a Loadout. Else we'll use the Restore table.
-		if istable( WSTAR_LO[id] ) then
-			tbl = WSTAR_LO[id]
-		else
-			tbl = WSTAR_WR[id]
+	local id = ply:SteamID()
+	local tbl
+	
+	-- If the WSTAR_LO table exsists for the player, it means he requested a Loadout. Else we'll use the Restore table.
+	if istable( WSTAR_LO[id] ) then
+		tbl = WSTAR_LO[id]
+	else
+		tbl = WSTAR_WR[id]
+	end
+	
+	if tbl and tbl.weapon and tbl.ammo then
+	
+		 -- We'll strip all existing weapons, if that's enabled.
+		if GetConVar("wstar_sv_stripdefault"):GetBool() then
+			ply:StripWeapons()
+			ply:StripAmmo()
 		end
 		
-		if tbl and tbl.weapon and tbl.ammo then
-		
-			 -- We'll strip all existing weapons, if that's enabled.
-			if GetConVar("wstar_sv_stripdefault"):GetBool() then
-				ply:StripWeapons()
-				ply:StripAmmo()
-			end
+		-- First, we'll handle the Weapons table.
+		for k,v in pairs( tbl.weapon ) do -- Go through all saved weapons.
+			ply:Give( k ) -- Give the player the weapon.
+			local w = ply:GetWeapon( k ) -- Get the ID of the new weapon.
+			if w and IsValid(w) and w:IsWeapon() then
 			
-			-- First, we'll handle the Weapons table.
-			for k,v in pairs( tbl.weapon ) do -- Go through all saved weapons.
-				ply:Give( k ) -- Give the player the weapon.
-				local w = ply:GetWeapon( k ) -- Get the ID of the new weapon.
-				if w and IsValid(w) and w:IsWeapon() then
+				-- Fill the primary and secondary ammo. We need a timer because of CW2.
+				timer.Simple( 0.4, function()
+					if v[1] and v[1] >= 0 then w:SetClip1( v[1] ) end
+					if v[2] and v[2] >= 0 then w:SetClip2( v[2] ) end
+				end )
 				
-					-- Fill the primary and secondary ammo. We need a timer because of CW2.
-					timer.Simple( 0.4, function()
-						if v[1] and v[1] >= 0 then w:SetClip1( v[1] ) end
-						if v[2] and v[2] >= 0 then w:SetClip2( v[2] ) end
-					end )
-					
-					-- Support for Customizable Weaponry 2.0. Code by Spy.
-					if GetConVar("wstar_sv_support_cw2"):GetBool() and istable( CustomizableWeaponry ) and w.CW20Weapon and istable( v["cw2attachments"] ) then
-						local loadOrder = {}
-						for k, v in pairs(v["cw2attachments"]) do
-							local attCategory = w.Attachments[k]
-							if attCategory then
-								local att = CustomizableWeaponry.registeredAttachmentsSKey[attCategory.atts[v]]
-								if att then
-									local pos = 1
-									if att.dependencies or attCategory.dependencies or (w.AttachmentDependencies and w.AttachmentDependencies[att.name]) then
-										pos = #loadOrder + 1
-									end
-									table.insert(loadOrder, pos, {category = k, position = v})
+				-- Support for Customizable Weaponry 2.0. Code by Spy.
+				if GetConVar("wstar_sv_support_cw2"):GetBool() and istable( CustomizableWeaponry ) and w.CW20Weapon and istable( v["cw2attachments"] ) then
+					local loadOrder = {}
+					for k, v in pairs(v["cw2attachments"]) do
+						local attCategory = w.Attachments[k]
+						if attCategory then
+							local att = CustomizableWeaponry.registeredAttachmentsSKey[attCategory.atts[v]]
+							if att then
+								local pos = 1
+								if att.dependencies or attCategory.dependencies or (w.AttachmentDependencies and w.AttachmentDependencies[att.name]) then
+									pos = #loadOrder + 1
 								end
+								table.insert(loadOrder, pos, {category = k, position = v})
 							end
 						end
-
-						-- After giving a CW2 weapon to the player, it needs some time to initialize, before we can send the attachments.
-						timer.Simple( 0.2, function()
-							for k, v in pairs(loadOrder) do
-								w:attach(v.category, v.position - 1)
-							end
-							CustomizableWeaponry.grenadeTypes.setTo(w, (v["cw2attachments"].grenadeType or 0), true)
-						end )
-
 					end
-					
-				end
-			end
-			
-			-- Next, we'll handle the Ammo table.
-			timer.Simple( 0.6, function()
-				for k,v in pairs( tbl.ammo ) do
-					if v then ply:SetAmmo( v, k ) end
-				end
-			end )
-			
-			WSTAR_Used[id] = true -- Mark that the player used up his weapon restore.
-			
-			if !tobool( ply:GetInfoNum( "wstar_cl_keeploadout", 0 ) ) then -- If the player doesn't want to keep Loadouts, get rid of the WSTAR_LO table.
-				WSTAR_LO[id] = nil
-			end
 
+					-- After giving a CW2 weapon to the player, it needs some time to initialize, before we can send the attachments.
+					timer.Simple( 0.2, function()
+						for k, v in pairs(loadOrder) do
+							w:attach(v.category, v.position - 1)
+						end
+						CustomizableWeaponry.grenadeTypes.setTo(w, (v["cw2attachments"].grenadeType or 0), true)
+					end )
+
+				end
+				
+			end
 		end
 		
-	end )
+		-- Next, we'll handle the Ammo table.
+		timer.Simple( 0.6, function()
+			for k,v in pairs( tbl.ammo ) do
+				if v then ply:SetAmmo( v, k ) end
+			end
+		end )
+		
+		WSTAR_Used[id] = true -- Mark that the player used up his weapon restore.
+		
+		if !tobool( ply:GetInfoNum( "wstar_cl_keeploadout", 0 ) ) then -- If the player doesn't want to keep Loadouts, get rid of the WSTAR_LO table.
+			WSTAR_LO[id] = nil
+		end
+
+	end
 
 end
 
 -- If Auto restore is enabled, we'll run the RestoreWeapons function upon spawn.
 hook.Add( "PlayerSpawn", "WSTAR_PlayerSpawn", function(ply)
-	if GetConVar("wstar_sv_auto"):GetBool() then WSTAR_RestoreWeapons(ply) end
+	if GetConVar("wstar_sv_auto"):GetBool() then
+		local delay = 0.5
+		if GetConVar("wstar_sv_support_cw2"):GetBool() and istable( CustomizableWeaponry ) then
+			local v = GetConVar("wstar_sv_support_delay"):GetInt()
+			if v > 5 then delay = 5
+			elseif v < 0.5 then delay = 0.5
+			else delay = v
+			end
+		end
+		timer.Simple( delay, function() WSTAR_RestoreWeapons(ply) end )
+	end
 end )
 -- Blocks the default loadout, if that's enabled.
 hook.Add( "PlayerLoadout", "WSTAR_PlayerSpawn", function(ply)
