@@ -5,83 +5,181 @@
 ----------------------------------------------------
 
 
-local version = "1.4"
-local Frame -- This will be our main menu.
-local WSTAR_LO = { } -- Main table for saved loadouts
+local Menu = { } -- This will be our main menu.
+--local WSTAR_LO = { } -- Main table for saved loadouts
+local von, dir, convars, pat_fn_mid, pat_fn, version = WSTAR.von, WSTAR.dir, WSTAR.convars, WSTAR.pat_fn_mid, WSTAR.pat_fn, WSTAR.version
+local IsValidFilename, DataToTbl, TblToData = WSTAR.IsValidFilename, WSTAR.DataToTbl, WSTAR.TblToData
+local dir_loadouts = dir .. "loadouts/"
+local last_com, last_restore
 
 -- If this is the first start, create a directory client-side
 if !file.Exists( "wstar", "DATA" ) then file.CreateDir( "wstar" ) end
+if !file.Exists( dir_loadouts, "DATA" ) then file.CreateDir( dir_loadouts ) end
 
 -- Creates the client-side cvars. 
 CreateClientConVar( "wstar_cl_keeploadout", "0", true, true )
+CreateClientConVar( "wstar_cl_delay", "1", true, true )
 
--- If the player has already saved loadouts, we'll load them.
-if file.Exists( "wstar/loadouts.txt", "DATA" ) then
-	WSTAR_LO = util.JSONToTable( file.Read( "wstar/loadouts.txt", "DATA" ) )
-	if istable( WSTAR_LO ) then
-		for k,v in pairs( WSTAR_LO ) do
-			for k2,v2 in pairs( v.ammo ) do
-				if !isstring(k2) then
-					v.ammo[tostring(k2)] = v2
-					v.ammo[k2] = nil
+
+local function LoadoutGetList()
+	local list = file.Find( dir_loadouts .."/*.dat", "DATA" )
+	if not istable( list ) then 
+		list = { }
+	end
+	return list
+end
+
+local function SendLoadout( filename )
+
+	local datastring = file.Read( dir_loadouts .. filename .. ".dat", "DATA" )
+	if not datastring then return end
+	
+	local checksum = string.Left( datastring, 8 )
+	local test = string.Right( datastring, string.len( datastring ) - 8 )
+	if ( not checksum ) or ( not test ) then return end
+	test = util.Decompress( test )
+	if not test then return end
+	if not istable( von.deserialize( test ) ) then return end
+	test, checksum = nil
+	
+	local size = string.len( datastring )
+	if size > 65000 then return end
+	
+	net.Start( "wstar_lo_load" )
+	net.WriteUInt( size, 16 )
+	net.WriteData( datastring, size )
+	net.SendToServer()
+	
+	return true
+	
+end
+
+
+-- Converting old v1 Loadout format
+if ( not file.Exists( "wstar/loadouts_isconvertedv2.txt", "DATA" ) ) and file.Exists( "wstar/loadouts.txt", "DATA" ) then
+	file.Write( "wstar/loadouts_isconvertedv2.txt", "" )
+	local old = util.JSONToTable( file.Read( "wstar/loadouts.txt", "DATA" ) )
+	if istable( old ) then
+		local current_run = 0
+		local used_filenames = { }
+		for k, v in pairs( old ) do
+			
+			current_run = current_run + 1
+			local filename = tostring( k )
+			local size = string.len( filename )
+			
+			filename = string.gsub( filename, pat_fn, "_" )
+			
+			if string.len( filename ) > 100 then
+				filename = string.Left( filename, 100 )
+			end
+			
+			filename = string.gsub( filename, "^[" .. pat_fn_mid .. "]", "_" )
+			filename = string.gsub( filename, "[" .. pat_fn_mid .. "]$", "_" )
+			
+			if used_filenames[ filename ] then
+				filename = filename .. "-" .. string.format( "%03u", tostring( current_run ) )
+			end
+			
+			used_filenames[ filename ] = true
+			
+			local tbl = { }
+			
+			tbl.weapon = { }
+			for k2, v2 in pairs( v.weapon ) do
+				local insert = { }
+				insert.class = tostring( k2 )
+				insert.clip1 = v2[1]
+				insert.clip2 = v2[2]
+				if v2.cw2attachments then
+					insert.cw2attachments = v2.cw2attachments
 				end
+				table.insert( tbl.weapon, insert )
 			end
-			for k2,v2 in pairs( v.weapon ) do
-				if !isstring(k2) then
-					v.weapon[tostring(k2)] = v2
-					v.weapon[k2] = nil
-				end
+			
+			tbl.ammo = { }
+			for k2, v2 in pairs( v.ammo ) do
+				tbl.ammo[ tostring( k2 ) ] = v2
 			end
-			if !isstring(k) then
-				WSTAR_LO[tostring(k)] = v
-				WSTAR_LO[k] = nil
+			
+			local datastring = TblToData( tbl )
+			if datastring then
+				file.Write( dir_loadouts .. filename .. ".dat", datastring )
 			end
+
 		end
 	end
 end
 
 
--- The server sends the server-side cvars for sync. Note, that we create them here without FCVAR_ARCHIVE,
--- because we don't want to fill the client.vdf file with stuff he doesn't need.
-net.Receive("wstar_convar_sync", function()
-	local tbl = net.ReadTable()
-	for k,v in pairs( tbl ) do
-		CreateConVar( k, v, { FCVAR_REPLICATED } )
-	end
-end)
-
 -- After the client requested to save a new Loadout, the server sends the weapons.
 -- We'll save them to a file on the CLIENTS computer.
-net.Receive("wstar_lo_save", function()
-	local name = net.ReadString()
-	WSTAR_LO[name] = net.ReadTable()
-	file.Write( "wstar/loadouts.txt", util.TableToJSON( WSTAR_LO, true ) )
-end)
+net.Receive( "wstar_lo_save", function()
+	local filename = net.ReadString()
+	local size = net.ReadUInt( 16 )
+	local datastring = net.ReadData( size )
+	if datastring then
+		file.Write( dir_loadouts .. filename .. ".dat", datastring )
+		if IsValid( Menu.Frame ) and IsValid( Menu.LoadoutList ) then
+			Menu.LoadoutList.Populate()
+		end
+		notification.AddLegacy( "Loadout saved.", NOTIFY_GENERIC, 5 )
+	else
+		notification.AddLegacy( "Saving loadout failed.", NOTIFY_ERROR, 5 )
+	end
+	filename, size, datastring = nil
+end )
 
 -- The server tells the player, whether he was allowed to restore his weapons or not.
-net.Receive("wstar", function()
+net.Receive( "wstar", function()
 	local success = net.ReadBool()
 	if success then
 		notification.AddLegacy( "Weapons restored.", NOTIFY_GENERIC, 5 )
 	else
 		notification.AddLegacy( "Weapon Restore already used up in this spawn.", NOTIFY_ERROR, 5 )
 	end
-end)
+end )
 
--- This function checks, if the player wants to enter something in a text field. In that case, the menu
--- grabs the keyboard and blocks the player's movement. After he's finished, the keyboard is set free again.
-local function KeyboardOn( pnl )
-	if ( IsValid( Frame ) and IsValid( pnl ) and pnl:HasParent( Frame ) ) then
-		Frame:SetKeyboardInputEnabled( true )
+net.Receive( "wstar_clearweapons", function()
+	notification.AddLegacy( "All weapons removed.", NOTIFY_CLEANUP, 5 )
+end )
+
+net.Receive( "wstar_lo_undo", function()
+	notification.AddLegacy( "Loadout request undone.", NOTIFY_CLEANUP, 5 )
+end )
+
+net.Receive( "wstar_lo_load", function()
+	notification.AddLegacy( "Loadout will be applied upon respawn.", NOTIFY_GENERIC, 5 )
+end )
+
+
+-- Support for TFA attachments, requires init client-side
+net.Receive( "wstar_attach_tfa", function()
+	if not LocalPlayer():Alive() then return end
+	local size = net.ReadUInt( 16 )
+	local datastring = net.ReadData( size )
+	local tbl = DataToTbl( datastring )
+	if tbl then
+		local weapon_class = tbl.class
+		local w = LocalPlayer():GetWeapon( weapon_class )
+		tbl = tbl.content
+		timer.Create( "wstar_timer_attach_" .. weapon_class, 0.1, 100, function()
+			if not LocalPlayer():Alive() then return end
+			if istable( TFA ) and w.SetTFAAttachment then
+				timer.Remove( "wstar_timer_attach_" .. weapon_class )
+				w:InitAttachments()
+				timer.Simple( 0.1, function()
+					if not LocalPlayer():Alive() then return end
+					for cat, att in pairs( tbl ) do
+						w:SetTFAAttachment(cat, att, true)
+					end
+				end )
+			end
+		end )
 	end
-end
-hook.Add( "OnTextEntryGetFocus", "wstar_keyboard_on", KeyboardOn )
-local function KeyboardOff( pnl )
-	if ( IsValid( Frame ) and IsValid( pnl ) and pnl:HasParent( Frame ) ) then
-		Frame:SetKeyboardInputEnabled( false )
-	end
-end
-hook.Add( "OnTextEntryLoseFocus", "wstar_keyboard_off", KeyboardOff )
+	size, datastring = nil
+end )
+
 
 -- Sends cvar changes to the server.
 local function ChangeConVar( p, v )
@@ -92,22 +190,64 @@ local function ChangeConVar( p, v )
 end
 
 
+-- This function checks, if the player wants to enter something in a text field. In that case, the menu
+-- grabs the keyboard and blocks the player's movement. After he's finished, the keyboard is set free again.
+local function KeyboardOn( pnl )
+	if ( IsValid( Menu.Frame ) and IsValid( pnl ) and pnl:HasParent( Menu.Frame ) ) then
+		Menu.Frame:SetKeyboardInputEnabled( true )
+	end
+end
+hook.Add( "OnTextEntryGetFocus", "wstar_keyboard_on", KeyboardOn )
+local function KeyboardOff( pnl )
+	if ( IsValid( Menu.Frame ) and IsValid( pnl ) and pnl:HasParent( Menu.Frame ) ) then
+		Menu.Frame:SetKeyboardInputEnabled( false )
+	end
+end
+hook.Add( "OnTextEntryLoseFocus", "wstar_keyboard_off", KeyboardOff )
+
+
+-- Blur Code by: https://facepunch.com/member.php?u=237675
+local blur = Material( "pp/blurscreen" )
+local function DrawBlur( panel, amount )
+	local x, y = panel:LocalToScreen( 0, 0 )
+	local scrW, scrH = ScrW(), ScrH()
+	surface.SetDrawColor( 255, 255, 255 )
+	surface.SetMaterial( blur )
+	for i = 1, 3 do
+		blur:SetFloat( "$blur", ( i / 3 ) * ( amount or 6 ) )
+		blur:Recompute()
+		render.UpdateScreenEffectTexture()
+		surface.DrawTexturedRect( x * -1, y * -1, scrW, scrH )
+	end
+end
+
+
 -- The main menu.
 local function WSTAR_Menu( )
 
-	Frame = vgui.Create( "DFrame" )
+	Menu.Frame = vgui.Create( "DFrame" )
+	local window_title = "Weapon S.T.A.R.: Setup, Transfer And Restore"
 	local fw, fh = 600, 700
 	local pw, ph = fw - 10, fh - 62
-	Frame:SetSize( fw, fh )
-	Frame:SetTitle( "Weapon S.T.A.R.: Setup, Transfer And Restore" )
-	Frame:SetVisible( true )
-	Frame:SetDraggable( true )
-	Frame:ShowCloseButton( true )
-	Frame:Center()
-	Frame:MakePopup()
-	Frame:SetKeyboardInputEnabled( false )
+	Menu.Frame:SetSize( fw, fh )
+	Menu.Frame:SetTitle( window_title )
+	Menu.Frame:SetVisible( true )
+	Menu.Frame:SetDraggable( true )
+	Menu.Frame:ShowCloseButton( true )
+	Menu.Frame:Center()
+	Menu.Frame:MakePopup()
+	Menu.Frame:SetKeyboardInputEnabled( false )
+	function Menu.Frame:Paint( w, h )
+		DrawBlur( self, 2 )
+		draw.RoundedBox( 10, 0, 0, w, h, Color( 0, 99, 177, 200 ) )
+		return true
+	end
+	function Menu.Frame.lblTitle:Paint( w, h )
+		draw.SimpleTextOutlined( window_title, "DermaDefaultBold", 1, 2, Color( 255, 255, 255, 255 ), 0, 0, 1, Color( 0, 0, 0, 255 ) )
+		return true
+	end
 	
-	local Sheet = vgui.Create( "DPropertySheet", Frame )
+	local Sheet = vgui.Create( "DPropertySheet", Menu.Frame )
 	Sheet:Dock( FILL )
 	
 	
@@ -123,14 +263,38 @@ local function WSTAR_Menu( )
 			LocalPlayer():ConCommand("wstar")
 		end
 		
+		local t = vgui.Create( "DLabel", panel )
+		t:SetPos( 455, 52 )
+		t:SetAutoStretchVertical( true )
+		t:SetSize( 35, 0 )
+		t:SetDark( true )
+		t:SetText( "Delay:" )
+		t:SetWrap( true )
+		
+		local s = vgui.Create( "DNumberWang", panel )
+		s.cvar = "wstar_cl_delay"
+		s:SetWide( 40 )
+		s:SetPos( 490, 50 )
+		s:SetDecimals( 1 )
+		s:SetInterval( 0.5 )
+		s:SetMinMax( 1, 5 )
+		s:SetValue( GetConVar( "wstar_cl_delay" ):GetFloat() )
+		s.OnValueChanged = function( p, v )
+			RunConsoleCommand( p.cvar, v )
+		end
+		
 		local b = vgui.Create( "DButton", panel )
 		b:SetPos( 145, 80 )
 		b:SetSize( 145, 20 )
 		b:SetText( "Clear all weapons" )
 		b.DoClick = function()
-			net.Start("wstar_clearweapons")
-			net.SendToServer()
-			notification.AddLegacy( "All weapons removed.", NOTIFY_CLEANUP, 5 )
+			if game.SinglePlayer() or not ( last_com and last_com > CurTime() ) then
+				last_com = CurTime() + GetConVar("wstar_sv_wait_com"):GetInt()
+				net.Start("wstar_clearweapons")
+				net.SendToServer()
+			else
+				notification.AddLegacy( "Please wait longer between requests.", NOTIFY_ERROR, 5 )
+			end
 		end
 		
 		local b = vgui.Create( "DButton", panel )
@@ -148,21 +312,24 @@ local function WSTAR_Menu( )
 		t:SetFont( "DermaLarge" )
 		t:SizeToContents()
 		
-		local LoadoutList = vgui.Create( "DListView", panel )
-		LoadoutList:SetPos( 10, 180 )
-		LoadoutList:SetSize( 280, 430 )
-		LoadoutList:SetMultiSelect( true )
-		LoadoutList:AddColumn( "Weapon Loadouts" )
+		Menu.LoadoutList = vgui.Create( "DListView", panel )
+		Menu.LoadoutList:SetPos( 10, 180 )
+		Menu.LoadoutList:SetSize( 280, 430 )
+		Menu.LoadoutList:SetMultiSelect( true )
+		Menu.LoadoutList:AddColumn( "Weapon Loadouts" )
 
-		local function PopulateList()
-			LoadoutList:Clear()
-			for k in pairs( WSTAR_LO ) do
-				LoadoutList:AddLine( k )
+		function Menu.LoadoutList:Populate()
+			Menu.LoadoutList:Clear()
+			for _, v in pairs( LoadoutGetList() ) do
+				local name = string.TrimRight( v, ".dat" )
+				if IsValidFilename( name ) then
+					Menu.LoadoutList:AddLine( name )
+				end
 			end
-			LoadoutList:SortByColumn( 1 )
+			Menu.LoadoutList:SortByColumn( 1 )
 		end
 		
-		PopulateList()
+		Menu.LoadoutList:Populate()
 		
 		local t = vgui.Create( "DLabel", panel )
 		t:SetPos( 320, 180 )
@@ -175,20 +342,35 @@ local function WSTAR_Menu( )
 		local LoadoutEntry = vgui.Create( "DTextEntry", panel )
 		LoadoutEntry:SetPos( 320, 200 )
 		LoadoutEntry:SetSize( 180, 20 )
+		LoadoutEntry.AllowInput = function( self, str )
+			if string.find( str, pat_fn ) then
+				return true
+			else
+				return false
+			end
+		end
+		local function Send()
+			if game.SinglePlayer() or not ( last_com and last_com > CurTime() ) then
+				last_com = CurTime() + GetConVar("wstar_sv_wait_com"):GetInt()
+				local name = LoadoutEntry:GetValue()
+				if not IsValidFilename( name ) then
+					notification.AddLegacy( "Invalid filename.", NOTIFY_ERROR, 5 )
+					return
+				end
+				net.Start("wstar_lo_save")
+				net.WriteString( name )
+				net.SendToServer()
+			else
+				notification.AddLegacy( "Please wait longer between requests.", NOTIFY_ERROR, 5 )
+			end
+		end
+		LoadoutEntry.OnEnter = Send
 		
 		local b = vgui.Create( "DButton", panel )
 		b:SetPos( 510, 200 )
 		b:SetSize( 50, 20 )
 		b:SetText( "Add new" )
-		b.DoClick = function()
-			local name = LoadoutEntry:GetValue()
-			if name == "" then return end
-			WSTAR_LO[name] = { }
-			net.Start("wstar_lo_save")
-			net.WriteString( name )
-			net.SendToServer()
-			PopulateList( LoadoutList )
-		end
+		b.DoClick = Send
 		
 		local t = vgui.Create( "DLabel", panel )
 		t:SetPos( 320, 240 )
@@ -201,13 +383,24 @@ local function WSTAR_Menu( )
 		b:SetSize( 85, 25 )
 		b:SetText( "Overwrite" )
 		b.DoClick = function()
-			local sel = LoadoutList:GetSelected()
-			if !sel[1] then return end
-			local name = tostring( sel[1]:GetValue(1) )
-			net.Start("wstar_lo_save")
-			net.WriteString( name )
-			net.SendToServer()
-			PopulateList( LoadoutList )
+			if game.SinglePlayer() or not ( last_com and last_com > CurTime() ) then
+				last_com = CurTime() + GetConVar("wstar_sv_wait_com"):GetInt()
+				local sel = Menu.LoadoutList:GetSelected()
+				if #sel < 1 then
+					notification.AddLegacy( "Nothing selected.", NOTIFY_ERROR, 5 )
+					return
+				elseif #sel > 1 then
+					notification.AddLegacy( "You can't overwrite more than one entry.", NOTIFY_ERROR, 5 )
+					return
+				end
+				if !sel[1] then return end
+				local name = tostring( sel[1]:GetValue(1) )
+				net.Start("wstar_lo_save")
+				net.WriteString( name )
+				net.SendToServer()
+			else
+				notification.AddLegacy( "Please wait longer between requests.", NOTIFY_ERROR, 5 )
+			end
 		end
 		
 		local b = vgui.Create( "DButton", panel )
@@ -215,13 +408,16 @@ local function WSTAR_Menu( )
 		b:SetSize( 85, 25 )
 		b:SetText( "Delete" )
 		b.DoClick = function()
-			local sel = LoadoutList:GetSelected()
+			local sel = Menu.LoadoutList:GetSelected()
+			if #sel < 1 then
+				notification.AddLegacy( "Nothing selected.", NOTIFY_ERROR, 5 )
+				return
+			end
 			for k,v in pairs( sel ) do
 				local name = tostring( v:GetValue(1) )
-				WSTAR_LO[name] = nil
+				file.Delete( dir_loadouts .. name .. ".dat" )
 			end
-			file.Write( "wstar/loadouts.txt", util.TableToJSON( WSTAR_LO, true ) )
-			PopulateList( LoadoutList )
+			Menu.LoadoutList:Populate()
 		end
 		
 		local c = vgui.Create( "DCheckBoxLabel", panel )
@@ -241,31 +437,44 @@ local function WSTAR_Menu( )
 		t:SetText( "If enabled, you will always spawn with this loadout.\nDisabling this, will take one respawn to apply." )
 		t:SizeToContents()
 		
+		local function RequestLoadout()
+			if game.SinglePlayer() or not ( last_com and last_com > CurTime() ) then
+				last_com = CurTime() + GetConVar("wstar_sv_wait_com"):GetInt()
+				local sel = Menu.LoadoutList:GetSelected()
+				if #sel < 1 then
+					notification.AddLegacy( "Nothing selected.", NOTIFY_ERROR, 5 )
+					return
+				end
+				local name = tostring( sel[1]:GetValue(1) )
+				local success = SendLoadout( name )
+				if not success then
+					notification.AddLegacy( "File is invalid.", NOTIFY_ERROR, 5 )
+				end
+			else
+				notification.AddLegacy( "Please wait longer between requests.", NOTIFY_ERROR, 5 )
+			end
+		end
+		
 		local b = vgui.Create( "DButton", panel )
 		b:SetPos( 320, 440 )
 		b:SetSize( 240, 50 )
 		b:SetText( "Request\nLoadout" )
 		b:SetEnabled( GetConVar("wstar_sv_loadouts"):GetBool() )
-		b.DoClick = function()
-			local sel = LoadoutList:GetSelected()
-			if !sel[1] then return end
-			local name = tostring( sel[1]:GetValue(1) )
-			if istable( WSTAR_LO[name] ) then
-				net.Start("wstar_lo_load")
-				net.WriteTable( WSTAR_LO[name] )
-				net.SendToServer()
-				notification.AddLegacy( "Loadout will be applied upon respawn.", NOTIFY_GENERIC, 5 )
-			end
-		end
+		b.DoClick = RequestLoadout
+		Menu.LoadoutList.DoDoubleClick = RequestLoadout
 		
 		local b = vgui.Create( "DButton", panel )
 		b:SetPos( 320, 500 )
 		b:SetSize( 240, 20 )
 		b:SetText( "Undo request" )
 		b.DoClick = function()
-			net.Start("wstar_lo_undo")
-			net.SendToServer()
-			notification.AddLegacy( "Loadout request undone.", NOTIFY_CLEANUP, 5 )
+			if game.SinglePlayer() or not ( last_com and last_com > CurTime() ) then
+				last_com = CurTime() + GetConVar("wstar_sv_wait_com"):GetInt()
+				net.Start("wstar_lo_undo")
+				net.SendToServer()
+			else
+				notification.AddLegacy( "Please wait longer between requests.", NOTIFY_ERROR, 5 )
+			end
 		end
 		
 		local t = vgui.Create( "DLabel", panel )
@@ -384,8 +593,17 @@ local function WSTAR_Menu( )
 		t:SetWrap( true )
 		
 		local c = vgui.Create( "DCheckBoxLabel", panel )
-		c.cvar = "wstar_sv_support_cw2"
+		c.cvar = "wstar_sv_support_tfa"
 		c:SetPos( 20, 490 )
+		c:SetValue( GetConVar(c.cvar):GetBool() )
+		c:SetText( "Enable TFA INS2 attachment support" )
+		c:SetDark( true )
+		c:SizeToContents()
+		c.OnChange = ChangeConVar
+		
+		local c = vgui.Create( "DCheckBoxLabel", panel )
+		c.cvar = "wstar_sv_support_cw2"
+		c:SetPos( 20, 510 )
 		c:SetValue( GetConVar(c.cvar):GetBool() )
 		c:SetText( "Enable Customizable Weaponry 2.0 support" )
 		c:SetDark( true )
@@ -393,11 +611,11 @@ local function WSTAR_Menu( )
 		c.OnChange = ChangeConVar
 		
 		local t = vgui.Create( "DLabel", panel )
-		t:SetPos( 20, 510 )
+		t:SetPos( 20, 530 )
 		t:SetAutoStretchVertical( true )
 		t:SetSize( pw - 40, 0 )
 		t:SetDark( true )
-		t:SetText( "Enables support for Customizable Weaponry 2.0 attachments. If enabled, all attachments on CW2 weapons can be restored. This setting has no effect if CW2 isn't installed." )
+		t:SetText( "Enables support for weapon attachments. If enabled, all attachments on TFA/CW2 weapons can be restored. Experimental feature that might not work under all conditions." )
 		t:SetWrap( true )
 		
 		if LocalPlayer():IsSuperAdmin() then
@@ -418,7 +636,6 @@ local function WSTAR_Menu( )
 			c:SetText( "Allow all admins to access Settings and Weapon Transfer." )
 			c:SetDark( true )
 			c:SizeToContents()
-			c:SetEnabled( false )
 			c.OnChange = ChangeConVar
 		
 		end
@@ -614,19 +831,26 @@ local function WSTAR_Menu( )
 		t:SetText( "Console Commands:" )
 		t:SetWrap( true )
 		
-		local t = vgui.Create( "DHTML", panel )
-		t:SetSize( pw - 35, 350 )
-		t:SetPos( 10, 270 )
-		t:SetHTML( [[
-			<html><body style="background-color: #FFFFFF; font-family: sans-serif; font-size: 10pt">
-			<h3>Client-side commands and convars</h3><br>These can be executed / changed from client console.<br><br><ul class="bb_ul"><li><b>wstar_menu</b><br>Opens the main menu. Recommended to bind this to a key.<br><br></li><li><b>wstar</b><br>Restores your weapons. Same as the big Restore Weapons button.<br><br></li><li><b>wstar_save</b><br>Admins only: Manually save the weapons of all players to a file. Used to prepare Weapon Transfer. Works only if Weapon Transfer is enabled.<br><br><br></li><li><b>wstar_cl_keeploadout</b> 0 / 1 <i>(Default: 0)</i><br>Enable persistent Weapon Loadouts.</li></ul><br><br><h3>Server-side convars</h3><br>These can only be changed from server console / rcon. Or use the menu, which allows admins to easily change all settings.<br><br><ul class="bb_ul"><li><b>wstar_sv_auto</b> 0 / 1 <i>(Default: 1)</i><br>Toggle auto restore of weapons. Can be used to disable the addon, if you don't want to use it.<br><br></li><li><b>wstar_sv_stripdefault</b> 0 / 1 <i>(Default: 1)</i><br>If enabled, the default loadout will be removed upon restore. Please note, that your ammo will be overwritten regardless. Recommended to keep on.<br><br></li><li><b>wstar_sv_blockloadout</b> 0 / 1 <i>(Default: 0)</i><br>If enabled, the default weapon loadout will be blocked. This is useful for transition between maps (like the HL2 campain).<br><br></li><li><b>wstar_sv_multi</b> 0 / 1 <i>(Default: 1)</i><br>If enabled, you will be able to restore your weapons and ammo manually anytime. Normally, you can only restore your weapons once per spawn. This allows cheating for more ammo.<br><br></li><li><b>wstar_sv_loadouts</b> 0 / 1 <i>(Default: 1)</i><br>Toggles the Loadout function. Disable if you don't want to use Loadouts on your server.<br><br></li><li><b>wstar_sv_support_cw2</b> 0 / 1 <i>(Default: 1)</i><br>Enables support for Customizable Weaponry 2.0 attachments.<br><br></li><li><b>wstar_sv_support_delay</b> 0.5 - 5.0 <i>(Default: 3.0)</i><br>Delay in ms before Auto Restore, in order to increase compatibility with Customizable Weaponry 2.0 attachments. Has not affect without CW 2 installed and support enabled.<br><br></li><li><b>wstar_sv_transfer_enabled</b> 0 / 1 <i>(Default: 0)</i><br>Toggles the Weapon Transfer function. You should only enable this, if you want to transfer weapons, otherwise you may startup Gmod and end up with yesterday's weapons.<br><br></li><li><b>wstar_sv_transfer_spauto</b> 0 / 1 <i>(Default: 1)</i><br>Toggles auto save for Weapon Transfer in SinglePlayer. If you disable that, you will have to use the wstar_save command BEFORE changing the map (or use the changelevel function in the menu).<br><br></li><li><b>wstar_sv_transfer_mpauto</b> 0 / 1 <i>(Default: 0)</i><br>Multiplayer only: Creates a timer, which saves the weapons of all players every 10 seconds. Normally you'll need to save manually before Weapon Transfer in multiplayer. Enabling this might cause performance issues. Use on your own risk!<br><br></li><li><b>wstar_sv_admins_allowall</b> 0 / 1 <i>(Default: 0)</i><br>If enabled, all other settings can be changed by normal admins via menu. Otherwise, only Super-Admins can change settings.<br><i>Of course, this setting can only be changed by Super-Admins / rcon / server console.</i></li></ul>
-			</body></html>
-		]] )
+		local ShowHelpButton = vgui.Create( "DButton", panel )
+		ShowHelpButton:SetPos( 120, 250 )
+		ShowHelpButton:SetSize( 30, 15 )
+		ShowHelpButton:SetText( "Show" )
+		ShowHelpButton.DoClick = function( self )
+			self:Remove()
+			local t = vgui.Create( "DHTML", panel )
+			t:SetSize( pw - 35, 350 )
+			t:SetPos( 10, 270 )
+			t:SetHTML( [[
+				<html><body style="background-color: #FFFFFF; font-family: sans-serif; font-size: 10pt">
+				<h3>Client-side commands and convars</h3><br>These can be executed / changed from client console.<br><br><ul class="bb_ul"><li><b>wstar_menu</b><br>Opens the main menu. Recommended to bind this to a key.<br><br></li><li><b>wstar</b><br>Restores your weapons. Same as the big Restore Weapons button.<br><br></li><li><b>wstar_save</b><br>Admins only: Manually save the weapons of all players to a file. Used to prepare Weapon Transfer. Works only if Weapon Transfer is enabled.<br><br><br></li><li><b>wstar_cl_keeploadout</b> 0 / 1 <i>(Default: 0)</i><br>Enable persistent Weapon Loadouts.</li></ul><br><br><h3>Server-side convars</h3><br>These can only be changed from server console / rcon. Or use the menu, which allows admins to easily change all settings.<br><br><ul class="bb_ul"><li><b>wstar_sv_auto</b> 0 / 1 <i>(Default: 1)</i><br>Toggle auto restore of weapons. Can be used to disable the addon, if you don't want to use it.<br><br></li><li><b>wstar_sv_stripdefault</b> 0 / 1 <i>(Default: 1)</i><br>If enabled, the default loadout will be removed upon restore. Please note, that your ammo will be overwritten regardless. Recommended to keep on.<br><br></li><li><b>wstar_sv_blockloadout</b> 0 / 1 <i>(Default: 0)</i><br>If enabled, the default weapon loadout will be blocked. This is useful for transition between maps (like the HL2 campain).<br><br></li><li><b>wstar_sv_multi</b> 0 / 1 <i>(Default: 1)</i><br>If enabled, you will be able to restore your weapons and ammo manually anytime. Normally, you can only restore your weapons once per spawn. This allows cheating for more ammo.<br><br></li><li><b>wstar_sv_loadouts</b> 0 / 1 <i>(Default: 1)</i><br>Toggles the Loadout function. Disable if you don't want to use Loadouts on your server.<br><br></li><li><b>wstar_sv_support_cw2</b> 0 / 1 <i>(Default: 1)</i><br>Enables support for Customizable Weaponry 2.0 attachments.<br><br></li><li><b>wstar_sv_support_delay</b> 0.5 - 5.0 <i>(Default: 3.0)</i><br>Delay in ms before Auto Restore, in order to increase compatibility with Customizable Weaponry 2.0 attachments. Has not affect without CW 2 installed and support enabled.<br><br></li><li><b>wstar_sv_transfer_enabled</b> 0 / 1 <i>(Default: 0)</i><br>Toggles the Weapon Transfer function. You should only enable this, if you want to transfer weapons, otherwise you may startup Gmod and end up with yesterday's weapons.<br><br></li><li><b>wstar_sv_transfer_spauto</b> 0 / 1 <i>(Default: 1)</i><br>Toggles auto save for Weapon Transfer in SinglePlayer. If you disable that, you will have to use the wstar_save command BEFORE changing the map (or use the changelevel function in the menu).<br><br></li><li><b>wstar_sv_transfer_mpauto</b> 0 / 1 <i>(Default: 0)</i><br>Multiplayer only: Creates a timer, which saves the weapons of all players every 10 seconds. Normally you'll need to save manually before Weapon Transfer in multiplayer. Enabling this might cause performance issues. Use on your own risk!<br><br></li><li><b>wstar_sv_admins_allowall</b> 0 / 1 <i>(Default: 0)</i><br>If enabled, all other settings can be changed by normal admins via menu. Otherwise, only Super-Admins can change settings.<br><i>Of course, this setting can only be changed by Super-Admins / rcon / server console.</i></li></ul>
+				</body></html>
+			]] )
+		end
 		
 end
 
 local function MenuToggle()
-	if IsValid( Frame ) then Frame:Close() else WSTAR_Menu() end
+	if IsValid( Menu.Frame ) then Menu.Frame:Close() else WSTAR_Menu() end
 end
 
 
@@ -667,8 +891,13 @@ list.Set( "DesktopWindows", "WSTAR", {
 concommand.Add( "wstar_menu", MenuToggle ) -- Opens the menu.
 
 concommand.Add( "wstar", function() -- Manual weapon restore.
-	net.Start("wstar")
-	net.SendToServer()
+	if game.SinglePlayer() or not ( last_restore and last_restore > CurTime() ) then
+		last_restore = CurTime() + GetConVar("wstar_sv_wait_restore"):GetInt()
+		net.Start("wstar")
+		net.SendToServer()
+	else
+		notification.AddLegacy( "Please wait longer between restores.", NOTIFY_ERROR, 5 )
+	end
 end )
 
 concommand.Add( "wstar_save", function() -- Save all players weapons.
